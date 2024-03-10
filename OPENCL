@@ -1,0 +1,151 @@
+#include <mpi.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <iostream>
+#include <omp.h>
+#include <CL/cl.h>
+
+#define DIM 1000 // Defining matrix size
+#define MAX_RAND 5 // Maximum value for random generator
+
+/* Global matrices */
+int matrix1[DIM][DIM];
+int matrix2[DIM][DIM];
+int res[DIM][DIM];
+cl_mem bufA, bufB, bufC; // OpenCL memory buffers
+
+cl_device_id device_id;
+cl_context context;
+cl_program program;
+cl_kernel kernel; // Kernel function
+cl_command_queue queue;
+cl_event event = NULL;
+
+int err;
+
+const int max = DIM;
+const int TS = 4;
+const size_t local[2] = { (size_t)TS, (size_t)TS };
+const size_t global[2] = { (size_t) max, (size_t)max };
+
+/* Structure for holding process information */
+struct ProcessInfo {
+    int rank, num_procs, start, end, num_threads;
+    double t_start, t_stop;
+};
+
+ProcessInfo val;
+
+/* Function declarations */
+void master_process(int proc, int start, int end);
+void slave_process(int proc, int start, int end);
+void create_matrix(int matrix[DIM][DIM]);
+void output_matrix(int matrix[DIM][DIM]);
+void delete_matrix(int matrix[DIM][DIM]);
+
+int main(int argc, char *argv[]) {
+    MPI_Init(&argc, &argv); // Initialize MPI environment
+    MPI_Comm_rank(MPI_COMM_WORLD, &val.rank); // Get current process ID
+    MPI_Comm_size(MPI_COMM_WORLD, &val.num_procs); // Get number of processes 
+
+    val.num_threads = 1;
+    val.start = val.rank * DIM / val.num_procs;
+    val.end = ((val.rank + 1) * DIM / val.num_procs);
+
+    if (val.rank == 0) {
+        val.t_start = MPI_Wtime(); // Start timing for master process
+    }
+
+    if (val.rank == 0) {
+        master_process(val.num_procs, val.start, val.end);
+    } else {
+        slave_process(val.num_procs, val.start, val.end);
+    }
+
+    if (val.rank == 0) {
+        // Code specific to master process
+    }
+
+    if (val.rank == 0) {
+        val.t_stop= MPI_Wtime(); // Stop timing for master process
+        printf("MPI Matrix Multiplication Performance with OpenCL\n");
+        printf("Dimension: %d\n", DIM);
+        printf("Processes: %d\n", val.num_procs);
+        printf("Threads: %d\n", val.num_threads);
+        printf("Run time: %f\n", val.t_stop - val.t_start);
+        if (DIM <= 10) {
+            printf("First matrix:\n");
+            output_matrix(matrix1);
+            printf("Second matrix:\n");
+            output_matrix(matrix2);
+            printf("Result:\n");
+            output_matrix(res);
+        }
+
+        free_memory(); // Free OpenCL memory
+    }
+
+    MPI_Finalize(); // Shutdown MPI environment
+    return 0;
+}
+
+/* Master process function */
+void master_process(int proc, int start, int end) {
+    create_matrix(matrix1); // Create matrix1
+    create_matrix(matrix2); // Create matrix2
+
+    MPI_Bcast(matrix2, DIM * DIM, MPI_INT, 0, MPI_COMM_WORLD); // Broadcast matrix2 to all processes
+    MPI_Scatter(&matrix1[0][0], DIM * DIM / proc, MPI_INT, MPI_IN_PLACE, DIM * DIM / proc, MPI_INT, 0, MPI_COMM_WORLD); // Scatter matrix1 data
+
+    // Perform matrix multiplication using CPU
+    for (int i = start; i < end; i++) {
+        for (int j = 0; j < DIM; j++) {
+            res[i][j] = 0;
+            for (int k = 0; k < DIM; k++) {
+                res[i][j] += matrix1[i][k] * matrix2[k][j];
+            }
+        }
+    }
+
+    MPI_Gather(MPI_IN_PLACE, DIM * DIM / proc, MPI_INT, &res[0][0], DIM * DIM / proc, MPI_INT, 0, MPI_COMM_WORLD); // Gather result data
+
+    // Setup OpenCL device, context, queue, program, and kernel
+    setup_openCL_device_context_queue_kernel((char*) "./matrix_ops.cl" , (char*) "multiply_matrices");
+
+    // Setup kernel memory buffers
+    setup_kernel_memory();
+
+    // Copy kernel arguments
+    copy_kernel_args();
+
+    // Submit the kernel for execution
+    clEnqueueNDRangeKernel(queue, kernel, 2, NULL, global, local, 0, NULL, &event);
+    clWaitForEvents(1, &event);
+
+    // Copy result data from device back to host
+    clEnqueueReadBuffer(queue, bufC, CL_TRUE, 0, DIM * DIM * sizeof(int), &res[0][0], 0, NULL, NULL);
+}
+
+/* Slave process function */
+void slave_process(int proc, int start, int end) {
+    MPI_Bcast(matrix2, DIM * DIM, MPI_INT, 0, MPI_COMM_WORLD); // Broadcast matrix2 to all processes
+    MPI_Scatter(&matrix1[0][0], DIM * DIM / proc, MPI_INT, &matrix1[start], DIM * DIM / proc, MPI_INT, 0, MPI_COMM_WORLD); // Scatter matrix1 data
+
+    // Perform matrix multiplication using CPU
+    for (int i = start; i < end; i++) {
+        for (int j = 0; j < DIM; j++) {
+            res[i][j] = 0;
+            for (int k = 0; k < DIM; k++) {
+                res[i][j] += matrix1[i][k] * matrix2[k][j];
+            }
+        }
+    }
+
+    MPI_Gather(&res[start], DIM * DIM / proc, MPI_INT, &res, DIM * DIM / proc, MPI_INT, 0, MPI_COMM_WORLD); // Gather result data
+}
+
+/* Function to create matrix */
+void create_matrix(int matrix[DIM][DIM]) {
+    for (int i = 0; i < DIM; i++) {
+        for (int j = 0; j < DIM; j++) {
+            matrix
