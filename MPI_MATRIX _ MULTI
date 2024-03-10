@@ -1,0 +1,114 @@
+#include <mpi.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <iostream>
+#include <omp.h>
+
+#define DIM 1000 // Define matrix size
+#define MAX_RAND 10 // Maximum random value
+
+/* Matrix storage */
+int matrix1[DIM][DIM];
+int matrix2[DIM][DIM];
+int res[DIM][DIM];
+
+/* Structure for holding process information */
+struct ProcessInfo {
+    int rank, num_procs, start, end; // Process rank, number of processes, start and end indices
+    double start_time, end_time; // Timing variables
+};
+
+ProcessInfo process_info;
+
+/* Function declarations */
+void master_process(int num_procs, int start, int end); // Master process function
+void slave_process(int start, int end); // Slave process function
+void create_matrix(int matrix[DIM][DIM]); // Function to create matrix with random values
+void output_matrix(int matrix[DIM][DIM]); // Function to output matrix values
+
+int main(int argc, char *argv[]) {
+    MPI_Init(&argc, &argv); // Initialize MPI environment
+    MPI_Comm_rank(MPI_COMM_WORLD, &process_info.rank); // Get current process ID
+    MPI_Comm_size(MPI_COMM_WORLD, &process_info.num_procs); // Get number of processes
+
+    process_info.start = process_info.rank * DIM / process_info.num_procs; // Calculate start index
+    process_info.end = ((process_info.rank + 1) * DIM / process_info.num_procs); // Calculate end index
+
+    if (process_info.rank == 0) {
+        process_info.start_time = MPI_Wtime(); // Start time for master process
+    }
+
+    if (process_info.rank == 0) {
+        master_process(process_info.num_procs, process_info.start, process_info.end);
+    } else {
+        slave_process(process_info.start, process_info.end);
+    }
+
+    if (process_info.rank == 0) {
+        process_info.end_time = MPI_Wtime(); // End time for master process
+        printf("MPI Matrix Multiplication Performance\n");
+        printf("Dimension: %d\n", DIM);
+        printf("Processes: %d\n", process_info.num_procs);
+        printf("Threads: %d\n", omp_get_max_threads());
+        printf("Run time: %f\n", process_info.end_time - process_info.start_time);
+        if (DIM <= 10) {
+            printf("First matrix:\n");
+            output_matrix(matrix1);
+            printf("Second matrix:\n");
+            output_matrix(matrix2);
+            printf("Result:\n");
+            output_matrix(res);
+        }
+    }
+
+    MPI_Finalize(); // Shut down MPI environment
+    return 0;
+}
+
+void master_process(int num_procs, int start, int end) {
+    create_matrix(matrix1); // Create matrix 1 with random values
+    create_matrix(matrix2); // Create matrix 2 with random values
+
+    MPI_Bcast(matrix2, DIM * DIM, MPI_INT, 0, MPI_COMM_WORLD); // Broadcast matrix2 to all processes
+    MPI_Scatter(&matrix1[0][0], DIM * DIM / num_procs, MPI_INT, MPI_IN_PLACE, DIM * DIM / num_procs, MPI_INT, 0, MPI_COMM_WORLD); // Scatter matrix1 data
+
+    // Perform matrix multiplication
+    for (int i = start; i < end; i++)
+        for (int j = 0; j < DIM; j++) {
+            res[i][j] = 0;
+            for (int k = 0; k < DIM; k++)
+                res[i][j] += matrix1[i][k] * matrix2[k][j];
+        }
+
+    MPI_Gather(MPI_IN_PLACE, DIM*DIM/num_procs, MPI_INT, &res[0][0], DIM*DIM/num_procs, MPI_INT, 0, MPI_COMM_WORLD); // Gather result data
+}
+
+void slave_process(int start, int end) {
+    MPI_Bcast(matrix2, DIM * DIM, MPI_INT, 0, MPI_COMM_WORLD); // Broadcast matrix2 to all processes
+    MPI_Scatter(&matrix1[0][0], DIM * DIM / process_info.num_procs, MPI_INT, &matrix1[start], DIM * DIM / process_info.num_procs, MPI_INT, 0, MPI_COMM_WORLD); // Scatter matrix1 data
+
+    // Perform matrix multiplication
+    for (int i = start; i < end; i++)
+        for (int j = 0; j < DIM; j++) {
+            res[i][j] = 0;
+            for (int k = 0; k < DIM; k++)
+                res[i][j] += matrix1[i][k] * matrix2[k][j];
+        }
+
+     MPI_Gather(&res[start], DIM*DIM/process_info.num_procs, MPI_INT, &res, DIM*DIM/process_info.num_procs, MPI_INT, 0, MPI_COMM_WORLD); // Gather result data
+}
+
+void create_matrix(int matrix[DIM][DIM]) {
+    for (int i = 0; i < DIM; i++)
+        for (int j = 0; j < DIM; j++)
+            matrix[i][j] = rand() % MAX_RAND; // Fill matrix with random values
+}
+
+void output_matrix(int matrix[DIM][DIM]) {
+    for (int i = 0; i < DIM; i++) {
+        for (int j = 0; j < DIM; j++)
+            std::cout << matrix[i][j] << "\t"; // Output matrix element
+        std::cout << "\n";
+    }
+    std::cout << "\n";
+}
