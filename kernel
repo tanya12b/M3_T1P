@@ -1,0 +1,15 @@
+// Kernel function for matrix multiplication
+__kernel void matrix_multiply(__global int* A, __global int* B, __global int* C, const int size) {
+    // Get global work item ID
+    int row = get_global_id(0);
+    int col = get_global_id(1);
+
+    // Perform matrix multiplication
+    int sum = 0;
+    for (int k = 0; k < size; ++k) {
+        sum += A[row * size + k] * B[k * size + col];
+    }
+
+    // Store result in output matrix C
+    C[row * size + col] = sum;
+}
